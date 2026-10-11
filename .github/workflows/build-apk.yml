@@ -1,0 +1,73 @@
+name: PEGASUS Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      website_url:
+        description: Website URL (HTTP or HTTPS)
+        required: true
+        type: string
+      app_name:
+        description: Android app display name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build WebView APK
+        env:
+          WEBSITE_URL: ${{ inputs.website_url }}
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+          case "$WEBSITE_URL" in
+            http://*|https://*) ;;
+            *) echo "URL harus dimulai dengan http:// atau https://"; exit 1 ;;
+          esac
+          # Escape values before placing them in Java string literals.
+          export WEBSITE_URL APP_NAME
+          python3 - <<'PY'
+          import os, json
+          url = os.environ["WEBSITE_URL"]
+          name = os.environ["APP_NAME"].replace("\n", " ").replace("\r", " ")[:40]
+          with open("app/src/main/java/com/pegasus/webapk/MainActivity.java", "r") as f:
+              source = f.read()
+          source = source.replace("__START_URL__", json.dumps(url))
+          with open("app/src/main/java/com/pegasus/webapk/MainActivity.java", "w") as f:
+              f.write(source)
+          with open("app/src/main/res/values/strings.xml", "w") as f:
+              f.write('<?xml version="1.0" encoding="utf-8"?>\\n<resources><string name="app_name">' +
+                      name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") +
+                      '</string></resources>')
+          PY
+          gradle --no-daemon assembleDebug
+          mkdir -p output
+          cp app/build/outputs/apk/debug/app-debug.apk output/PEGASUS-app.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pegasus-apk
+          path: output/PEGASUS-app.apk
+          retention-days: 3
